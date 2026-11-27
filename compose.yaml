@@ -1,0 +1,44 @@
+services:
+  app:
+    build: ./app
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: [mongo]
+
+  mongo:
+    image: mongo:8
+
+  # Constant traffic against /hello.
+  load:
+    image: curlimages/curl
+    command: sh -c 'while true; do curl -s -o /dev/null app:8080/hello; sleep 0.5; done'
+    depends_on: [app]
+
+  obi:
+    image: otel/ebpf-instrument:latest
+    privileged: true   # loads eBPF programs into the OrbStack VM kernel
+    pid: "service:app" # shares app's PID namespace: only sees that process
+    environment:
+      OTEL_EBPF_OPEN_PORT: 8080            # instrument whatever listens on 8080
+      OTEL_EBPF_TRACE_PRINTER: text        # also print every span to the log
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+    depends_on: [app, lgtm]
+
+  # OTel Collector + Tempo + Prometheus + Loki + Grafana in a single container.
+  lgtm:
+    image: grafana/otel-lgtm:latest
+    ports: ["127.0.0.1:3300:3000"]
+
+  # Labs (not started by make run): make bpftrace / make uprobe
+  bpftrace:
+    image: alpine
+    profiles: [lab]
+    privileged: true
+    pid: host
+    volumes: ["./trace.bt:/trace.bt:ro"]
+    command: sh -c 'mount -t tracefs tracefs /sys/kernel/tracing && apk add -q bpftrace && bpftrace /trace.bt'
+
+  uprobe:
+    build: ./uprobe
+    profiles: [lab]
+    privileged: true
+    pid: "service:app"
